@@ -7,13 +7,18 @@ pipeline {
         stage('Build') {
             steps {
                 echo '🛠️ Build en cours...'
-                sh 'mvn clean compile'
+                dir('demo-app') {
+                    sh 'mvn clean compile'
+        }
+                
             }
         }
         stage('Test') {
             steps {
                 echo '✅ Tests unitaires...'
-                sh 'mvn test'
+                dir('demo-app') {
+                    sh 'mvn test'
+        }
             }
         }
     }
