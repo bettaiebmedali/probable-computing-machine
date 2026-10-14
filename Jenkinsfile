@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -7,43 +6,55 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    environment {
-        DOCKER_IMAGE = 'bettaiebtraining/microapp'
-    }
-
     stages {
 
         stage('Charger .env') {
             steps {
                 script {
-                    def envFile = '.env'
+                    if (!fileExists('.env')) {
+                        error('Fichier .env introuvable à la racine du dépôt.')
+                    }
+                }
 
-                    if (!fileExists(envFile)) {
-                        error("Fichier .env introuvable à la racine du dépôt.")
+                sh '''
+                    set -eu
+
+                    # Lire les variables du fichier .env
+                    APP_NAME=$(sed -n 's/^APP_NAME=//p' .env | head -n 1)
+                    APP_PORT=$(sed -n 's/^APP_PORT=//p' .env | head -n 1)
+                    APP_VERSION=$(sed -n 's/^APP_VERSION=//p' .env | head -n 1)
+
+                    # Vérifier les valeurs
+                    test -n "$APP_NAME" || {
+                        echo "Erreur : APP_NAME absente de .env"
+                        exit 1
                     }
 
-                    def config = [:]
-
-                    readFile(envFile).split('\n').each { line ->
-                        line = line.trim()
-
-                        if (line && !line.startsWith('#') && line.contains('=')) {
-                            def parts = line.split('=', 2)
-                            config[parts[0].trim()] = parts[1].trim()
-                        }
+                    test -n "$APP_PORT" || {
+                        echo "Erreur : APP_PORT absente de .env"
+                        exit 1
                     }
 
-                    ['APP_NAME', 'APP_PORT', 'APP_VERSION'].each { key ->
-                        if (!config[key]) {
-                            error("Variable ${key} absente ou vide dans .env")
-                        }
-                        env[key] = config[key]
+                    test -n "$APP_VERSION" || {
+                        echo "Erreur : APP_VERSION absente de .env"
+                        exit 1
                     }
 
-                    echo "Application : ${env.APP_NAME}"
-                    echo "Port        : ${env.APP_PORT}"
-                    echo "Version     : ${env.APP_VERSION}"
-                    echo "Branche     : ${env.BRANCH_NAME ?: 'non définie'}"
+                    # Enregistrer les variables pour les étapes suivantes
+                    printf 'APP_NAME=%s\\nAPP_PORT=%s\\nAPP_VERSION=%s\\n' \
+                        "$APP_NAME" "$APP_PORT" "$APP_VERSION" > .env.jenkins
+
+                    echo "Application : $APP_NAME"
+                    echo "Port        : $APP_PORT"
+                    echo "Version     : $APP_VERSION"
+                '''
+
+                script {
+                    def values = readFile('.env.jenkins').trim().split('\n')
+
+                    env.APP_NAME = values[0].substring('APP_NAME='.length())
+                    env.APP_PORT = values[1].substring('APP_PORT='.length())
+                    env.APP_VERSION = values[2].substring('APP_VERSION='.length())
                 }
             }
         }
@@ -53,16 +64,13 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "Construction de l'image Docker..."
-                    echo "Application : $APP_NAME"
-                    echo "Version : $APP_VERSION"
-
+                    echo "Construction de l'image..."
                     docker build \
-                      --build-arg APP_NAME="$APP_NAME" \
-                      --build-arg APP_PORT="$APP_PORT" \
-                      -t "$DOCKER_IMAGE:$APP_VERSION" \
-                      -t "$DOCKER_IMAGE:latest" \
-                      .
+                        --build-arg APP_NAME="$APP_NAME" \
+                        --build-arg APP_PORT="$APP_PORT" \
+                        -t "microapp:$APP_VERSION" \
+                        -t "microapp:latest" \
+                        .
                 '''
             }
         }
@@ -71,11 +79,8 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-
-                    echo "Vérification de l'image..."
-                    docker image inspect "$DOCKER_IMAGE:$APP_VERSION"
-
-                    echo "Image construite avec succès."
+                    docker image inspect "microapp:$APP_VERSION"
+                    echo "Image Docker vérifiée."
                 '''
             }
         }
@@ -85,20 +90,7 @@ pipeline {
                 branch 'main'
             }
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
-                    sh '''
-                        set +x
-                        echo "$DOCKER_PASSWORD" | docker login \
-                          --username "$DOCKER_USER" \
-                          --password-stdin
-                    '''
-                }
+                echo 'Connexion Docker Hub à configurer si nécessaire.'
             }
         }
 
@@ -107,12 +99,7 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sh '''
-                    set -eu
-
-                    docker push "$DOCKER_IMAGE:$APP_VERSION"
-                    docker push "$DOCKER_IMAGE:latest"
-                '''
+                echo 'Push à configurer après avoir défini le dépôt Docker Hub.'
             }
         }
 
@@ -121,21 +108,18 @@ pipeline {
                 branch 'main'
             }
             steps {
-                echo 'Étape de déploiement à configurer selon le serveur cible.'
-                echo "Image prête : ${env.DOCKER_IMAGE}:${env.APP_VERSION}"
+                echo "Déploiement à configurer pour ${env.APP_NAME}."
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline terminé avec succès pour ${env.BRANCH_NAME ?: 'branche inconnue'}."
+            echo 'Pipeline terminé avec succès.'
         }
-
         failure {
             echo 'Pipeline en échec : consulter les logs.'
         }
-
         always {
             echo 'Fin du pipeline.'
         }
