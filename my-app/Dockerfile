@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY app.py .
+
+ARG APP_NAME=MicroApp
+ARG APP_PORT=8080
+ARG APP_VERSION=3.0.0
+
+ENV APP_NAME=${APP_NAME}
+ENV APP_PORT=${APP_PORT}
+ENV APP_VERSION=${APP_VERSION}
+
+EXPOSE 8080
+
+USER nobody
+
+CMD ["python", "-u", "app.py"]
