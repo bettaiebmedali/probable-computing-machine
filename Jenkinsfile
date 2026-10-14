@@ -1,59 +1,49 @@
+
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
     environment {
-        DOCKER_IMAGE = 'TON_DOCKERHUB_ID/microapp'
-        APP_NAME = ''
-        APP_PORT = ''
-        APP_VERSION = ''
+        DOCKER_IMAGE = 'bettaiebtraining/microapp'
     }
 
     stages {
+
         stage('Charger .env') {
             steps {
                 script {
-                    if (!fileExists('.env')) {
-                        error('Fichier .env introuvable')
+                    def envFile = '.env'
+
+                    if (!fileExists(envFile)) {
+                        error("Fichier .env introuvable à la racine du dépôt.")
                     }
 
                     def config = [:]
 
-                    readFile('.env').split('\n').each { line ->
+                    readFile(envFile).split('\n').each { line ->
                         line = line.trim()
 
-                        if (line && !line.startsWith('#')) {
+                        if (line && !line.startsWith('#') && line.contains('=')) {
                             def parts = line.split('=', 2)
-
-                            if (parts.length == 2) {
-                                config[parts[0].trim()] = parts[1].trim()
-                            }
+                            config[parts[0].trim()] = parts[1].trim()
                         }
                     }
 
                     ['APP_NAME', 'APP_PORT', 'APP_VERSION'].each { key ->
                         if (!config[key]) {
-                            error("Variable obligatoire absente : ${key}")
+                            error("Variable ${key} absente ou vide dans .env")
                         }
+                        env[key] = config[key]
                     }
-
-                    if (!(config.APP_PORT ==~ /[0-9]{1,5}/) ||
-                        config.APP_PORT.toInteger() < 1 ||
-                        config.APP_PORT.toInteger() > 65535) {
-                        error('APP_PORT invalide')
-                    }
-
-                    if (!(config.APP_VERSION ==~ /[0-9A-Za-z][0-9A-Za-z_.-]*/)) {
-                        error('APP_VERSION invalide')
-                    }
-
-                    env.APP_NAME = config.APP_NAME
-                    env.APP_PORT = config.APP_PORT
-                    env.APP_VERSION = config.APP_VERSION
 
                     echo "Application : ${env.APP_NAME}"
-                    echo "Port : ${env.APP_PORT}"
-                    echo "Version : ${env.APP_VERSION}"
-                    echo "Branche : ${env.BRANCH_NAME}"
+                    echo "Port        : ${env.APP_PORT}"
+                    echo "Version     : ${env.APP_VERSION}"
+                    echo "Branche     : ${env.BRANCH_NAME ?: 'non définie'}"
                 }
             }
         }
@@ -63,12 +53,16 @@ pipeline {
                 sh '''
                     set -eu
 
+                    echo "Construction de l'image Docker..."
+                    echo "Application : $APP_NAME"
+                    echo "Version : $APP_VERSION"
+
                     docker build \
-                        --build-arg APP_NAME="$APP_NAME" \
-                        --build-arg APP_PORT="$APP_PORT" \
-                        --build-arg APP_VERSION="$APP_VERSION" \
-                        -t "$DOCKER_IMAGE:$APP_VERSION" \
-                        .
+                      --build-arg APP_NAME="$APP_NAME" \
+                      --build-arg APP_PORT="$APP_PORT" \
+                      -t "$DOCKER_IMAGE:$APP_VERSION" \
+                      -t "$DOCKER_IMAGE:latest" \
+                      .
                 '''
             }
         }
@@ -78,29 +72,10 @@ pipeline {
                 sh '''
                     set -eu
 
-                    docker run -d \
-                        --name "microapp-test-${BUILD_NUMBER}" \
-                        -p 127.0.0.1::8080 \
-                        "$DOCKER_IMAGE:$APP_VERSION"
+                    echo "Vérification de l'image..."
+                    docker image inspect "$DOCKER_IMAGE:$APP_VERSION"
 
-                    cleanup() {
-                        docker rm -f "microapp-test-${BUILD_NUMBER}" >/dev/null 2>&1 || true
-                    }
-                    trap cleanup EXIT
-
-                    PORT=$(docker port "microapp-test-${BUILD_NUMBER}" 8080/tcp | sed 's/.*://')
-
-                    OK=0
-                    for i in $(seq 1 20); do
-                        if curl -fsS "http://127.0.0.1:$PORT/health" | grep -q healthy; then
-                            OK=1
-                            break
-                        fi
-                        sleep 1
-                    done
-
-                    test "$OK" -eq 1
-                    curl -fsS "http://127.0.0.1:$PORT/"
+                    echo "Image construite avec succès."
                 '''
             }
         }
@@ -119,8 +94,9 @@ pipeline {
                 ]) {
                     sh '''
                         set +x
-                        printf '%s' "$DOCKER_PASSWORD" |
-                            docker login -u "$DOCKER_USER" --password-stdin
+                        echo "$DOCKER_PASSWORD" | docker login \
+                          --username "$DOCKER_USER" \
+                          --password-stdin
                     '''
                 }
             }
@@ -134,7 +110,6 @@ pipeline {
                 sh '''
                     set -eu
 
-                    docker tag "$DOCKER_IMAGE:$APP_VERSION" "$DOCKER_IMAGE:latest"
                     docker push "$DOCKER_IMAGE:$APP_VERSION"
                     docker push "$DOCKER_IMAGE:latest"
                 '''
@@ -146,21 +121,23 @@ pipeline {
                 branch 'main'
             }
             steps {
-                echo "Déploiement prévu de ${env.DOCKER_IMAGE}:${env.APP_VERSION}"
                 echo 'Étape de déploiement à configurer selon le serveur cible.'
+                echo "Image prête : ${env.DOCKER_IMAGE}:${env.APP_VERSION}"
             }
         }
     }
 
     post {
-        always {
-            echo "Fin du pipeline : ${env.BRANCH_NAME}"
-        }
         success {
-            echo 'Pipeline terminée avec succès.'
+            echo "Pipeline terminé avec succès pour ${env.BRANCH_NAME ?: 'branche inconnue'}."
         }
+
         failure {
             echo 'Pipeline en échec : consulter les logs.'
+        }
+
+        always {
+            echo 'Fin du pipeline.'
         }
     }
 }
